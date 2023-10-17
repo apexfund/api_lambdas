@@ -1,0 +1,65 @@
+version: 2.1
+orbs:
+  aws-cli: circleci/aws-cli@4.0
+executors:
+  python-executor:
+    docker:
+      - image: circleci/python
+jobs:
+  build:
+    executor: python-executor
+    steps:
+      - checkout
+      
+      - aws-cli/setup:
+          profile_name: eb-cli
+
+      - run:
+          name: Install dependencies
+          command: |
+            pip install -r requirements.txt
+            pip install awsebcli
+
+      - run:
+          name: Setup DynamoDB Tables
+          command: python infrastructure/setup_dynamodb.py
+
+      - run:
+          name: Setup LambdaDynamoDBRole
+          command: python infrastructure/setup_iam.py
+
+      - run:
+          name: Package Lambda Functions
+          command: |
+            zip -r fetch_data.zip lambdas/fetch_data/*
+            zip -r process_data.zip lambdas/process_data/*
+
+      - run:
+          name: Deploy Lambda Functions
+          command: |
+            if aws lambda get-function --function-name fetchData ; then
+                aws lambda update-function-code --function-name fetchData --zip-file fileb://fetch_data.zip
+            else
+                aws lambda create-function --function-name fetchData \
+                  --zip-file fileb://fetch_data.zip \
+                  --handler lambdas/fetch_data.app.fetch_data \
+                  --runtime python3.11 \
+                  --role arn:aws:iam::170647040355:role/LambdaDynamoDBRole
+            fi
+
+            if aws lambda get-function --function-name processData ; then
+                aws lambda update-function-code --function-name processData --zip-file fileb://process_data.zip
+            else
+                aws lambda create-function --function-name processData \
+                  --zip-file fileb://process_data.zip \
+                  --handler lambdas/process_data.app.process_data \
+                  --runtime python3.11 \
+                  --role arn:aws:iam::170647040355:role/LambdaDynamoDBRole
+            fi
+
+
+workflows:
+  version: 2
+  build-and-deploy:
+    jobs:
+      - build
